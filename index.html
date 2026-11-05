@@ -1,106 +1,21 @@
-'use strict';
-const KEY='blitz_classroom_v12'; // 기존 저장된 게임을 그대로 이어받습니다.
-const COLORS=[{name:'빨강',hex:'#db5262'},{name:'파랑',hex:'#397fce'},{name:'초록',hex:'#279a78'},{name:'노랑',hex:'#e4b63e'},{name:'보라',hex:'#8565cb'},{name:'주황',hex:'#e77f43'},{name:'분홍',hex:'#db6ab3'},{name:'청록',hex:'#188b9c'},{name:'남색',hex:'#5166b9'},{name:'갈색',hex:'#93684d'}];
-const DEFAULT_WORDS='동물\n과일\n나라\n직업\n운동\n음식\n악기\n교통수단\n꽃\n도시\n곤충\n채소\n동화\n가전제품\n계절\n문구류\n장소\n영화\n학교 물건\n탈것';
-const $=id=>document.getElementById(id);
-const clone=o=>JSON.parse(JSON.stringify(o));
-const pick=a=>a[Math.floor(Math.random()*a.length)];
-const esc=s=>String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
-function base(){return {version:12,stage:'setup',config:{teamCount:4,names:Array.from({length:10},(_,i)=>`${i+1}모둠`),words:DEFAULT_WORDS,colorMode:'auto',colorCount:4,duelDelay:3,finishMode:'score',target:10},teams:[],currentIndex:0,seen:[],acquired:[],matches:0,duel:null,continueBeyond:false,finished:false,notice:'',lastReveal:null,undo:null,view:'game'};}
-function load(){try{const obj=JSON.parse(localStorage.getItem(KEY));if(obj?.version===12&&['setup','play'].includes(obj.stage)&&obj.config&&Array.isArray(obj.teams)){if(!Number.isInteger(obj.config.duelDelay)||obj.config.duelDelay<0||obj.config.duelDelay>15)obj.config.duelDelay=3;return obj;}}catch(e){}return base();}
-let state=load();
-const save=()=>{try{localStorage.setItem(KEY,JSON.stringify(state));$('saveStatus').textContent='✓ 이 기기에 자동 저장';}catch(e){$('saveStatus').textContent='⚠ 저장 실패: 브라우저 저장 공간 확인';}};
-const wordsFrom=text=>[...new Set(String(text).split(/\r?\n/).map(s=>s.trim()).filter(Boolean))];
-const colorCount=()=>state.config.colorMode==='auto'?Math.min(10,Math.max(2,Math.ceil(state.config.teamCount/2)+1)):Number(state.config.colorCount);
-const points=()=>state.teams.map(t=>t.score);
-const claimed=()=>new Set(state.acquired.map(a=>a.word));
-function availableWords(teamId){const taken=new Set(state.teams.filter(t=>t.id!==teamId&&t.card).map(t=>t.card.word));const acquired=claimed();const currentWords=wordsFrom(state.config.words);return currentWords.filter(w=>!taken.has(w)&&!acquired.has(w));}
-function chooseWord(teamId){const options=availableWords(teamId);if(!options.length)return null;const fresh=options.filter(w=>!state.seen.includes(w));return pick(fresh.length?fresh:options);}
-function finishCheck(){if(state.continueBeyond||state.config.finishMode==='manual')return false;if(state.config.finishMode==='score')return state.teams.some(t=>t.score>=state.config.target);return state.matches>=state.config.target;}
-function render(){document.title='블리츠 | 모둠 대항전';if(state.stage==='setup')renderSetup();else if(state.finished)renderResults();else renderGame();renderOverlay();save();}
-function renderSetup(error=''){
- const c=state.config;
- $('app').innerHTML=`<section class="intro"><div class="eyebrow">CLASSROOM WORD GAME</div><h1>오늘은 우리 반 블리츠!</h1><p>모둠·제시어·종료 조건을 설정한 다음 바로 시작해 보세요.</p></section>
- ${error?`<div class="error" role="alert">${esc(error)}</div>`:''}
- <form id="setupForm" class="setup-grid"><div class="panel"><h2>① 모둠 설정</h2>
- <div class="field"><label for="teamCount">모둠 수 (2~10개)</label><select id="teamCount" class="input">${Array.from({length:9},(_,i)=>i+2).map(n=>`<option value="${n}" ${n===c.teamCount?'selected':''}>${n}모둠</option>`).join('')}</select></div>
- <div class="field"><span class="field-label">모둠 이름</span><div id="teamInputs" class="team-name-list"></div></div>
- <hr class="subtle-separator"><h2>② 카드 색상</h2><div class="field"><span class="field-label">색상 개수 설정</span><div class="choice-grid"><label class="choice"><input type="radio" name="colorMode" value="auto" ${c.colorMode==='auto'?'checked':''}><span>자동 조절</span></label><label class="choice"><input type="radio" name="colorMode" value="manual" ${c.colorMode==='manual'?'checked':''}><span>직접 지정</span></label></div></div>
- <div class="field" id="colorCountWrap"><label for="colorCount">색상 개수 (2~10개)</label><select id="colorCount" class="input">${Array.from({length:9},(_,i)=>i+2).map(n=>`<option value="${n}" ${n===c.colorCount?'selected':''}>${n}가지</option>`).join('')}</select></div><div class="hint" id="autoColorHint"></div>
- <hr class="subtle-separator"><h2>③ 대결 화면 타이밍</h2><div class="field"><label for="duelDelay">같은 색 카드 공개 후 대결 화면까지 (0~15초)</label><select id="duelDelay" class="input">${Array.from({length:16},(_,n)=>`<option value="${n}" ${n===c.duelDelay?'selected':''}>${n===0?'즉시 표시':`${n}초 후 표시`}</option>`).join('')}</select><small class="hint">그동안 전체 카드 화면을 보여주고 다음 카드 버튼은 잠급니다.</small></div><hr class="subtle-separator"><h2>④ 게임 종료</h2><div class="field"><span class="field-label">종료 방식 (하나 선택)</span><div class="choice-grid">${[['score','목표 점수'],['matches','대결 횟수'],['manual','교사 직접 종료']].map(([v,t])=>`<label class="choice"><input type="radio" name="finishMode" value="${v}" ${c.finishMode===v?'checked':''}><span>${t}</span></label>`).join('')}</div></div>
- <div class="field" id="targetWrap"><label for="target">목표 점수 또는 대결 횟수</label><input id="target" class="input" type="number" min="1" max="9999" step="1" value="${c.target}"></div>
- </div><div class="panel"><h2>⑤ 제시어 입력</h2><p class="muted">한 줄에 하나씩 입력하세요. 빈 줄과 중복 제시어는 자동 정리됩니다.</p><div class="field"><label for="words">제시어 목록</label><textarea id="words" spellcheck="false">${esc(c.words)}</textarea><small id="wordsCount"></small></div>
- <div class="notice">💡 같은 제시어는 화면에 동시에 나오지 않습니다. 한 모둠이 획득한 제시어는 이번 게임에서 다시 등장하지 않습니다.</div>
- <div class="setup-action"><button class="btn primary large full" type="submit">⚡ 게임 시작하기</button></div><div class="footer-note">로그인 없이 이용 · 브라우저에 자동 저장 · GitHub Pages 무료 배포</div></div></form>`;
- const teamCount=$('teamCount'),ti=$('teamInputs');
- function refreshNames(){const n=Number(teamCount.value);ti.innerHTML=Array.from({length:n},(_,i)=>`<input class="input" data-team-name="${i}" maxlength="30" aria-label="${i+1}모둠 이름" value="${esc(c.names[i]??`${i+1}모둠`)}">`).join('');refreshColors();}
- function refreshColors(){const manual=document.querySelector('[name=colorMode]:checked').value==='manual';$('colorCountWrap').hidden=!manual;const n=Number(teamCount.value);$('autoColorHint').textContent=manual?'색상은 매번 독립적으로 무작위 추첨됩니다.':`자동 설정 시 ${Math.min(10,Math.max(2,Math.ceil(n/2)+1))}가지 색상을 사용합니다.`;}
- function refreshTarget(){$('targetWrap').hidden=document.querySelector('[name=finishMode]:checked').value==='manual';}
- function refreshCount(){const n=wordsFrom($('words').value).length;$('wordsCount').textContent=`현재 ${n}개 · 게임 시작에 최소 ${teamCount.value}개 권장`;}
- teamCount.addEventListener('change',()=>{captureNames();c.teamCount=Number(teamCount.value);refreshNames();refreshCount();});
- function captureNames(){ti.querySelectorAll('[data-team-name]').forEach(el=>{c.names[Number(el.dataset.teamName)]=el.value;});}
- ti.addEventListener('input',e=>{if(e.target.matches('[data-team-name]'))c.names[Number(e.target.dataset.teamName)]=e.target.value;});
- document.querySelectorAll('[name=colorMode]').forEach(el=>el.addEventListener('change',refreshColors));
- document.querySelectorAll('[name=finishMode]').forEach(el=>el.addEventListener('change',refreshTarget));
- $('words').addEventListener('input',refreshCount);refreshNames();refreshTarget();refreshCount();
- $('setupForm').addEventListener('submit',e=>{e.preventDefault();captureNames();const n=Number(teamCount.value);const ws=wordsFrom($('words').value);if(ws.length<n){renderSetup(`제시어가 부족합니다. ${n}모둠에서는 최소 ${n}개를 입력해 주세요. 현재 ${ws.length}개입니다.`);return;}
- c.words=$('words').value;c.colorMode=document.querySelector('[name=colorMode]:checked').value;c.colorCount=Number($('colorCount').value);c.duelDelay=Number($('duelDelay').value);c.finishMode=document.querySelector('[name=finishMode]:checked').value;c.target=Number($('target').value)||10;const names=c.names.slice(0,n).map((v,i)=>v.trim()||`${i+1}모둠`);if(new Set(names).size!==names.length){renderSetup('모둠 이름은 서로 다르게 설정해 주세요.');return;}
- const mode=document.querySelector('[name=finishMode]:checked').value;const target=Number($('target').value);if(mode!=='manual'&&(!Number.isInteger(target)||target<1||target>9999)){renderSetup('목표값은 1~9999 사이의 정수로 입력해 주세요.');return;}
- c.teamCount=n;c.names=names;c.words=ws.join('\n');c.colorMode=document.querySelector('[name=colorMode]:checked').value;c.colorCount=Number($('colorCount').value);c.duelDelay=Number($('duelDelay').value);c.finishMode=mode;c.target=mode==='manual'?10:target;
- state.teams=names.map((name,id)=>({id,name,score:0,card:null}));state.stage='play';state.currentIndex=0;state.seen=[];state.acquired=[];state.matches=0;state.duel=null;state.continueBeyond=false;state.finished=false;state.undo=null;state.notice='';state.lastReveal=null;state.view='game';render();});
-}
-function renderGame(){const active=state.teams.filter(t=>t.card),next=state.teams[state.currentIndex];const high=Math.max(...points());const condition=state.config.finishMode==='score'?`목표 ${state.config.target}점`:state.config.finishMode==='matches'?`목표 ${state.config.target}회`:'자유 진행';
- $('app').innerHTML=`<section class="topbar"><div><div class="eyebrow">LIVE GAME</div><h1>⚡ 블리츠 대결</h1></div><div class="stats"><span class="chip">${esc(condition)}</span><span class="chip">대결 ${state.matches}회</span><span class="chip">획득 ${state.acquired.length}장</span></div></section>
- ${state.notice?`<div class="notice" role="status">${esc(state.notice)}</div>`:''}
- <div class="scoreboard">${state.teams.map(t=>`<div class="score-card ${t.score===high&&high>0?'leader':''}"><strong>${esc(t.name)}</strong><div class="score-num">${t.score}</div><span class="muted" style="font-size:11px">점 · 획득 ${state.acquired.filter(a=>a.winnerId===t.id).length}장</span></div>`).join('')}</div>
- <div class="row wrap" style="justify-content:space-between;margin:0 0 15px"><h2 style="margin:0">모둠별 카드</h2><span class="chip">다음 차례: ${esc(next.name)}</span></div>
- <div class="cards-grid">${state.teams.map(t=>`<article class="game-card ${t.card?'active':''} ${!state.duel&&t.id===next.id?'next':''}" ${t.card?`style="background:${COLORS[t.card.color].hex};color:${t.card.color===3?'#192337':'white'}"`:''}><div class="card-team">${esc(t.name)}</div>${t.card?`<div class="card-word ${state.lastReveal===t.id?'card-face':''}">${esc(t.card.word)}</div><div class="card-bottom">${COLORS[t.card.color].name}</div>`:`<div class="card-empty">카드 없음</div><div class="card-bottom">${t.id===next.id?'곧 공개':'대기 중'}</div>`}</article>`).join('')}</div>
- <div class="toolbar"><button class="btn primary large next-btn" id="nextCard" ${state.duel?'disabled':''}>▶ 다음 카드</button><button class="btn" id="undo" ${state.undo?'':'disabled'}>↶ 판정 취소</button><button class="btn" id="records">▤ 획득 카드</button><button class="btn" id="settings">⚙ 설정</button><button class="btn danger" id="endGame">게임 종료</button></div>`;
- $('nextCard').onclick=reveal;$('undo').onclick=undo;$('records').onclick=()=>{state.view='records';renderOverlay();};$('settings').onclick=()=>{state.view='settings';renderOverlay();};$('endGame').onclick=()=>{state.view='endConfirm';renderOverlay();};
-}
-function reveal(){if(state.stage!=='play'||state.finished||state.duel)return;const t=state.teams[state.currentIndex];const word=chooseWord(t.id);if(!word){state.notice='사용할 수 있는 제시어가 없습니다. 획득된 제시어는 다시 나오지 않습니다. 게임을 종료하거나 현재 설정으로 재시작해 주세요.';state.view='exhausted';render();return;}
- const color=Math.floor(Math.random()*colorCount());t.card={word,color};if(!state.seen.includes(word))state.seen.push(word);state.lastReveal=t.id;state.currentIndex=(state.currentIndex+1)%state.teams.length;state.notice='';state.undo=null;
- const rival=state.teams.find(other=>other.id!==t.id&&other.card&&other.card.color===color);
- if(rival){state.duel={ids:[rival.id,t.id],pendingUntil:Date.now()+state.config.duelDelay*1000};state.view='duel';}render();}
-function adjudicate(winnerId){if(!state.duel)return;const [a,b]=state.duel.ids;const ids=[a,b];if(winnerId!==null&&!ids.includes(winnerId))return;
- state.undo=clone({teams:state.teams,acquired:state.acquired,matches:state.matches,duel:state.duel,notice:state.notice,continueBeyond:state.continueBeyond,finished:state.finished,view:'duel'});
- if(winnerId===null){state.teams[a].card=null;state.teams[b].card=null;state.notice='무승부! 양쪽 카드를 제거했습니다.';}else{const loserId=ids.find(id=>id!==winnerId);const loser=state.teams[loserId];state.acquired.push({winnerId,loserId,word:loser.card.word,color:loser.card.color});loser.card=null;state.teams[winnerId].score+=1;state.notice=`${state.teams[winnerId].name} 승리! 상대 카드 획득 · +1점`;}
- state.matches+=1;state.duel=null;state.lastReveal=null;state.view=finishCheck()?'goal':'game';render();}
-function undo(){if(!state.undo)return;const prev=state.undo;state.teams=prev.teams;state.acquired=prev.acquired;state.matches=prev.matches;state.duel=prev.duel;state.notice=prev.notice;state.continueBeyond=prev.continueBeyond;state.finished=prev.finished;state.view='duel';if(state.duel)state.duel.pendingUntil=0;state.undo=null;state.lastReveal=null;render();}
-function renderResults(){const ranking=[...state.teams].sort((a,b)=>b.score-a.score);const max=ranking[0].score;const winners=ranking.filter(t=>t.score===max).map(t=>t.name);let rank=0;let oldScore=null;
- $('app').innerHTML=`<section class="intro" style="text-align:center"><div class="eyebrow">FINAL RESULTS</div><h1>🏆 게임 종료!</h1><p class="highlight" style="font-weight:900;font-size:22px">${esc(winners.join(' · '))} ${winners.length>1?'공동 우승':'우승'}!</p><p>총 대결 ${state.matches}회 · 획득 카드 ${state.acquired.length}장</p></section><section class="panel" style="max-width:760px;margin:auto"><h2>최종 순위</h2><div class="result-ranking">${ranking.map((t,i)=>{if(t.score!==oldScore){rank=i+1;oldScore=t.score;}return `<div class="rank-item ${rank===1?'winner':''}"><span><strong>${rank}위</strong> &nbsp; ${esc(t.name)} <small class="muted">(획득 ${state.acquired.filter(x=>x.winnerId===t.id).length}장)</small></span><strong>${t.score}점</strong></div>`;}).join('')}</div><div class="row wrap" style="margin-top:20px"><button class="btn primary" id="resume">▶ 이어하기</button><button class="btn" id="resultsRecords">획득 카드 보기</button><button class="btn" id="resultsRestart">현재 설정으로 재시작</button><button class="btn danger" id="resultsNew">완전히 새 게임</button></div></section>`;
- $('resume').onclick=()=>{state.finished=false;state.continueBeyond=true;state.notice='게임을 이어갑니다. 이후에는 교사가 직접 종료합니다.';render();};$('resultsRecords').onclick=()=>{state.view='records';renderOverlay();};$('resultsRestart').onclick=()=>{state.view='restartConfirm';renderOverlay();};$('resultsNew').onclick=()=>{state.view='newConfirm';renderOverlay();};}
-function modal(title,body,buttons=[],wide=false){$('modalRoot').innerHTML=`<div class="modal-backdrop"><section class="modal ${wide?'wide':''}" role="dialog" aria-modal="true" aria-label="${esc(title)}"><h2>${esc(title)}</h2>${body}<div class="modal-buttons">${buttons.map(b=>`<button class="btn ${b.type||''}" data-modal-action="${b.action}">${esc(b.label)}</button>`).join('')}</div></section></div>`;
- $('modalRoot').querySelectorAll('[data-modal-action]').forEach(btn=>btn.onclick=()=>modalAction(btn.dataset.modalAction));}
-const closeModal=()=>{$('modalRoot').innerHTML='';state.view='game';save();};
-let duelRevealTimer=null;
-function renderOverlay(){if(duelRevealTimer!==null){clearTimeout(duelRevealTimer);duelRevealTimer=null;}if(state.stage!=='play'){ $('modalRoot').innerHTML='';return;}
- if(state.duel){
-  // 같은 색이 등장해도 교사가 설정한 시간 동안은 원래 카드판만 보여줍니다.
-  // 시각은 저장되므로 새로고침해도 대기 시간이 새로 시작되지 않습니다.
-  const remaining=(state.duel.pendingUntil||0)-Date.now();
-  if(remaining>0){$('modalRoot').innerHTML='';duelRevealTimer=setTimeout(()=>{duelRevealTimer=null;if(state.stage==='play'&&state.duel)renderOverlay();},remaining);return;}
-  const [a,b]=state.duel.ids;const ta=state.teams[a],tb=state.teams[b];const markup=`<p class="muted">같은 색깔이 나왔습니다! 상대 모둠의 제시어에 맞는 단어를 먼저 외치세요.</p><div class="duel-cards">${[ta,tb].map(t=>`<div class="duel-card" style="background:${COLORS[t.card.color].hex};color:${t.card.color===3?'#192337':'white'}"><span>${esc(t.name)}</span><strong>${esc(t.card.word)}</strong></div>`).join('')}</div><p class="muted">승리한 모둠을 누르거나 무승부를 선택하세요. 판정 전에는 다음 카드가 공개되지 않습니다.</p>`;
- modal('⚡ 같은 색! 블리츠 대결',markup,[{action:`win-${a}`,label:`${ta.name} 승리`,type:'primary'},{action:`win-${b}`,label:`${tb.name} 승리`,type:'primary'},{action:'draw',label:'무승부 · 두 장 제거'}],true);return;}
- if(state.view==='goal'){const byScore=state.config.finishMode==='score';const reached=state.teams.filter(t=>t.score>=state.config.target).map(t=>t.name).join(' · ');modal(byScore?'🎉 목표 점수 달성!':'🎉 목표 대결 횟수 달성!',`<p>${byScore?`<strong>${esc(reached)}</strong> 모둠이 ${state.config.target}점에 도달했습니다.`:`대결 ${state.matches}회로 목표 ${state.config.target}회에 도달했습니다.`}</p><p>게임을 종료하시겠습니까, 계속 진행하시겠습니까?</p><p class="hint">계속 진행하면 동일한 목표 알림은 다시 나타나지 않으며 교사가 직접 종료할 때까지 진행합니다.</p>`,[{action:'finish',label:'게임 종료',type:'primary'},{action:'continue',label:'계속 진행'}]);return;}
- if(state.view==='records'){const body=state.teams.map(t=>{const cards=state.acquired.filter(x=>x.winnerId===t.id);return `<h3>${esc(t.name)} <span class="muted">${t.score}점 · 획득 ${cards.length}장</span></h3><div class="acquired-list">${cards.length?cards.map(x=>`<span class="acquired-card" style="background:${COLORS[x.color].hex};color:${x.color===3?'#192337':'white'}">${esc(x.word)}</span>`).join(''):'<span class="muted">아직 획득한 카드가 없습니다.</span>'}</div>`;}).join('');modal('▤ 획득 카드 기록',body,[{action:'close',label:'닫기',type:'primary'}],true);return;}
- if(state.view==='settings'){modal('⚙ 게임 중 설정',`<p class="muted">모둠 이름·점수·대결 화면 지연시간을 수정할 수 있습니다. 모둠 수·제시어·색상 개수는 진행 중 변경할 수 없습니다.</p><form id="settingsForm"><div class="field"><label for="settingsDuelDelay">대결 화면 지연시간 (0~15초)</label><select id="settingsDuelDelay" class="input">${Array.from({length:16},(_,n)=>`<option value="${n}" ${n===state.config.duelDelay?'selected':''}>${n===0?'즉시 표시':`${n}초 후 표시`}</option>`).join('')}</select><small class="hint">다음 대결부터 적용됩니다.</small></div><div class="team-name-list">${state.teams.map(t=>`<div class="field"><label for="name${t.id}">${t.id+1}모둠 이름</label><input id="name${t.id}" class="input" maxlength="30" value="${esc(t.name)}"><label style="margin-top:8px" for="score${t.id}">점수</label><input id="score${t.id}" class="input" type="number" min="0" max="99999" step="1" value="${t.score}"></div>`).join('')}</div><div id="settingsError" class="error" style="display:none"></div></form>`,[{action:'saveSettings',label:'변경 사항 저장',type:'primary'},{action:'close',label:'취소'}],true);return;}
- if(state.view==='endConfirm'){modal('게임을 종료하시겠습니까?',`<p>현재까지의 점수로 최종 순위를 표시합니다. 종료 후에도 이어하기를 선택할 수 있습니다.</p>`,[{action:'finish',label:'게임 종료',type:'primary'},{action:'close',label:'취소'}]);return;}
- if(state.view==='restartConfirm'){modal('현재 설정으로 재시작',`<p>모둠 이름·제시어·색상·종료 설정은 유지하되, <strong>모든 점수, 획득 카드, 진행 기록이 초기화</strong>됩니다. 되돌릴 수 없습니다.</p>`,[{action:'restart',label:'재시작 확인',type:'danger'},{action:'close',label:'취소'}]);return;}
- if(state.view==='newConfirm'){modal('완전히 새 게임을 시작할까요?',`<p><strong>모든 설정, 모둠 이름, 제시어, 점수, 획득 카드, 자동 저장된 게임 기록</strong>을 삭제하고 처음 설정 화면으로 돌아갑니다. 이 작업은 되돌릴 수 없습니다.</p>`,[{action:'new',label:'모두 초기화하고 새 게임',type:'danger'},{action:'close',label:'취소'}]);return;}
- if(state.view==='exhausted'){modal('사용할 수 있는 제시어가 없습니다',`<p>현재 화면에서 중복 없이 사용할 수 있는 제시어가 모두 소진되었습니다. 이미 획득한 제시어는 재등장할 수 없습니다.</p><p class="muted">현재 설정으로 재시작하면 획득 기록이 초기화되어 모든 제시어를 다시 사용할 수 있습니다.</p>`,[{action:'endConfirm',label:'게임 종료'},{action:'restartConfirm',label:'현재 설정으로 재시작'},{action:'close',label:'계속 화면 보기'}]);return;}
- $('modalRoot').innerHTML='';
-}
-function modalAction(action){if(action.startsWith('win-'))return adjudicate(Number(action.slice(4)));if(action==='draw')return adjudicate(null);
- if(action==='close')return closeModal();if(action==='continue'){state.continueBeyond=true;state.notice='목표 달성 후 계속 진행 중입니다. 이후에는 교사가 직접 종료합니다.';state.view='game';render();return;}
- if(action==='finish'){state.finished=true;state.view='game';render();return;}
- if(action==='endConfirm'||action==='restartConfirm'){state.view=action;renderOverlay();return;}
- if(action==='restart'){const names=state.teams.map(t=>t.name);state.teams=names.map((name,id)=>({id,name,score:0,card:null}));state.currentIndex=0;state.seen=[];state.acquired=[];state.matches=0;state.duel=null;state.continueBeyond=false;state.finished=false;state.notice='새 판을 시작했습니다. 모둠과 제시어 설정은 유지됩니다.';state.lastReveal=null;state.undo=null;state.view='game';render();return;}
- if(action==='new'){try{localStorage.removeItem(KEY);}catch(e){}state=base();render();return;}
- if(action==='saveSettings'){const names=state.teams.map(t=>$(`name${t.id}`).value.trim()||`${t.id+1}모둠`);const scores=state.teams.map(t=>Number($(`score${t.id}`).value));let error='';if(new Set(names).size!==names.length)error='모둠 이름은 서로 달라야 합니다.';else if(scores.some(s=>!Number.isInteger(s)||s<0||s>99999))error='점수는 0~99999 사이의 정수여야 합니다.';if(error){$('settingsError').style.display='block';$('settingsError').textContent=error;return;}state.teams.forEach((t,i)=>{t.name=names[i];t.score=scores[i];});state.config.names=names;state.config.duelDelay=Number($('settingsDuelDelay').value);state.undo=null;state.view='game';state.notice='게임 설정을 저장했습니다. 변경한 지연시간은 다음 대결부터 적용됩니다.';render();return;}
-}
-// 설정/재시작 메뉴는 게임 본 화면의 설정 창에서 접근할 수 있습니다.
-const originalRenderOverlay=renderOverlay;
-renderOverlay=function(){if(state.view==='settings'&&!state.duel&&!state.finished){originalRenderOverlay();const modalEl=$('modalRoot').querySelector('.modal');if(modalEl){const extra=document.createElement('div');extra.innerHTML='<hr class="subtle-separator"><div class="row wrap"><button class="btn btn-sm" id="settingsRestart">현재 설정으로 재시작</button><button class="btn btn-sm danger" id="settingsNew">완전히 새 게임</button></div>';modalEl.append(extra);$('settingsRestart').onclick=()=>{state.view='restartConfirm';renderOverlay();};$('settingsNew').onclick=()=>{state.view='newConfirm';renderOverlay();};}return;}originalRenderOverlay();};
-render();
-
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#10192b">
+  <title>블리츠 | 모둠 대항전</title>
+  <link rel="stylesheet" href="style.css">
+  <script src="script.js" defer></script>
+</head>
+<body>
+  <div class="app-shell">
+    <header class="site-header">
+      <div class="brand"><span class="brand-icon">⚡</span><span>BLITZ <small>모둠 대항전</small></span></div>
+      <span id="saveStatus" class="save-status" aria-live="polite">이 기기에 자동 저장</span>
+    </header>
+    <main id="app" aria-live="polite"></main>
+  </div>
+  <div id="modalRoot"></div>
+</body>
+</html>
